@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""
+populate_vector_store.py
+
+Extract text from a specified PDF file and add it to a persistent ChromaDB
+vector store. Assumes required packages (chromadb, PyPDF2/etc. via doc_parser)
+and their dependencies (like jsonschema-specifications) are installed.
+"""
+import sys
+from pathlib import Path
+import argparse
+
+# --- jsonschema_specifications Handling Removed ---
+# The previous fallback/vendoring logic for jsonschema_specifications has been removed.
+# Ensure 'jsonschema-specifications' is installed in your environment,
+# typically as a dependency of 'jsonschema' or 'chromadb'.
+# Example: pip install chromadb
+
+import chromadb
+from chromadb.config import Settings
+
+# --- doc_parser Import ---
+# Assumes doc_parser.py exists in the Python path (e.g., same directory)
+# and provides an 'extract_text_from_pdf' function.
+try:
+    from doc_parser import extract_text_from_pdf
+except ImportError:
+    print("❌ Error: Failed to import 'extract_text_from_pdf' from 'doc_parser'.")
+    print("Ensure 'doc_parser.py' exists and is accessible.")
+    sys.exit(1)
+
+
+def main(pdf_path: str):
+    """
+    Extract text from the given PDF and store it in a ChromaDB collection.
+
+    Args:
+        pdf_path (str): Path to the PDF file.
+    """
+    try:
+        # Resolve the path to get a clear, absolute path
+        pdf_file = Path(pdf_path).expanduser().resolve(strict=True)
+    except FileNotFoundError:
+        print(f"❌ Error: PDF file not found at resolved path: {Path(pdf_path).expanduser().resolve()}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌ Error processing path '{pdf_path}': {e}")
+        sys.exit(1)
+
+    # --- ChromaDB Setup ---
+    # Database will be created in the current working directory unless changed.
+    persist_directory = "./irb_db"
+    db_path = Path(persist_directory).resolve()
+    print(f"ℹ️  Using ChromaDB persistent storage at: {db_path}")
+
+    try:
+        client = chromadb.Client(Settings(
+            chroma_db_impl="duckdb+parquet",
+            persist_directory=str(db_path) # Use string representation of path
+        ))
+    except Exception as e:
+        print(f"❌ Error initializing ChromaDB client: {e}")
+        sys.exit(1)
+
+    collection_name = "appendix_b_data"
+    # Consider making the collection name configurable if needed
+    collection = client.get_or_create_collection(name=collection_name)
+
+    # --- Text Extraction ---
+    print(f"ℹ️  Processing '{pdf_file.name}'...")
+    try:
+        # >>> Consider implementing text chunking here <<<
+        # For better vector search, chunk the text into smaller segments
+        # (e.g., paragraphs) instead of adding the whole document at once.
+        text = extract_text_from_pdf(str(pdf_file))
+
+        if not text or not text.strip():
+            print(f"⚠️ Warning: No text extracted from '{pdf_file.name}'. Check the PDF content or the parser logic.")
+            # Decide if you want to exit or just skip adding
+            return # Skip adding if no text found
+
+    except Exception as err:
+        print(f"❌ Error extracting text from '{pdf_file.name}': {err}")
+        sys.exit(1) # Exit if extraction fails
+
+    # --- Add to ChromaDB ---
+    # Using filename stem for a simple, unique-ish ID. Adjust if needed.
+    doc_id = f"appendix_b_{pdf_file.stem}"
+    metadata = {"source": pdf_file.name}
+
+    try:
+        # Add the extracted text (or chunks) to the collection
+        collection.add(
+            ids=[doc_id],        # Use chunk IDs if chunking
+            documents=[text],    # Use list of chunks if chunking
+            metadatas=[metadata] # Add chunk-specific metadata if needed
+        )
+        print(f"✅ Successfully added document ID '{doc_id}' from '{pdf_file.name}' to collection '{collection_name}'.")
+        # Optional: Persist changes explicitly if needed, though usually handled by client/settings
+        # client.persist()
+    except Exception as e:
+        print(f"❌ Error adding document ID '{doc_id}' to ChromaDB: {e}")
+        # Decide if you want to exit or continue if processing multiple files
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Extract text from a PDF and populate a ChromaDB vector store."
+    )
+    # Changed pdf_path to be a required argument (no default, no '?')
+    parser.add_argument(
+        "pdf_path",
+        help="Path to the input PDF file."
+    )
+    args = parser.parse_args()
+
+    # argparse handles the check for missing required arguments automatically.
+    main(args.pdf_path)
